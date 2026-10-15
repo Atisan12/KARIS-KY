@@ -95,6 +95,9 @@ export interface EscrowSummary {
   funding_close_snapshot: FundingCloseSnapshot | null;
   unique_funder_count: number;
   is_allowlist_active: boolean;
+  allowlist_active: boolean;
+  dispute_pause_active: boolean;
+  dispute_pause_expiry: string | null;
   schema_version: number;
   sme_collateral_commitment: SmeCollateralCommitment | null;
   has_primary_attestation: boolean;

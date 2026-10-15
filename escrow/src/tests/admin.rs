@@ -363,6 +363,66 @@ fn test_migrate_from_zero_uninitialized_panics() {
 }
 
 #[test]
+fn test_read_model_summary_defaults_no_dispute_pause_and_allowlist_inactive() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let summary = client.get_escrow_summary();
+
+    assert!(!summary.dispute_pause_active);
+    assert_eq!(summary.dispute_pause_expiry, None);
+    assert!(!summary.allowlist_active);
+}
+
+#[test]
+fn test_read_model_summary_reflects_active_dispute_pause() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let paused_at = env.ledger().timestamp();
+    let duration = 3600u64;
+    client.pause_dispute(&String::from_str(&env, "TICKET-SUMMARY"), &duration);
+
+    let summary = client.get_escrow_summary();
+
+    assert!(summary.dispute_pause_active);
+    assert_eq!(summary.dispute_pause_expiry, Some(paused_at + duration));
+}
+
+#[test]
+fn test_read_model_summary_dispute_pause_auto_expired() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let paused_at = env.ledger().timestamp();
+    let duration = 1800u64;
+    client.pause_dispute(&String::from_str(&env, "TICKET-EXPIRED"), &duration);
+
+    env.ledger().set_timestamp(paused_at + duration);
+
+    let summary = client.get_escrow_summary();
+
+    assert!(!summary.dispute_pause_active);
+    assert_eq!(summary.dispute_pause_expiry, None);
+}
+
+#[test]
+fn test_read_model_summary_reflects_allowlist_active() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    client.set_allowlist_active(&true);
+    assert!(client.get_escrow_summary().allowlist_active);
+
+    client.set_allowlist_active(&false);
+    assert!(!client.get_escrow_summary().allowlist_active);
+}
+
+#[test]
 fn test_read_model_summary_includes_optional_admin_fields() {
     let env = Env::default();
     let (client, admin, sme) = setup(&env);

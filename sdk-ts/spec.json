@@ -467,6 +467,17 @@
         { "name": "max_unique_investors", "type": "Option<u32>", "description": "Investor cap" },
         { "name": "funding_deadline_days", "type": "Option<u32>", "description": "Funding window in days" }
       ]
+    },
+    "EscrowSummary": {
+      "description": "Composite read-only snapshot returned by get_escrow_summary",
+      "fields": [
+        { "name": "escrow", "type": "InvoiceEscrow", "description": "Current escrow state" },
+        { "name": "legal_hold", "type": "bool", "description": "Whether a legal hold is currently active" },
+        { "name": "funding_close_snapshot", "type": "Option<FundingCloseSnapshot>", "description": "Immutable funding-close snapshot (null before funded)" },
+        { "name": "primary_attestation_hash", "type": "Option<BytesN<32>>", "description": "Primary attestation digest (null when unset)" },
+        { "name": "attestation_append_log", "type": "Vec<BytesN<32>>", "description": "Attestation audit log (empty array when unset)" },
+        { "name": "sme_collateral_commitment", "type": "Option<SmeCollateralCommitment>", "description": "SME collateral metadata (null when never recorded)" }
+      ]
     }
   },
   "constants": {

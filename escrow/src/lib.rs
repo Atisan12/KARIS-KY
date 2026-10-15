@@ -3515,6 +3515,9 @@ impl LiquifactEscrow {
         let funding_close_snapshot_opt = Self::get_funding_close_snapshot(env.clone());
         let unique_funder_count = Self::get_unique_funder_count(env.clone());
         let is_allowlist_active = Self::is_allowlist_active(env.clone());
+        let dispute_pause = Self::get_dispute_pause(env.clone());
+        let dispute_pause_active = dispute_pause.is_some();
+        let dispute_pause_expiry = dispute_pause.map(|p| p.expires_at_ledger_timestamp as u64);
         let schema_version = Self::get_version(env.clone());
         let sme_collateral_commitment = Self::get_sme_collateral_commitment(env.clone());
         let primary_attestation_hash = Self::get_primary_attestation_hash(env.clone());
@@ -3540,6 +3543,8 @@ impl LiquifactEscrow {
             funding_close_snapshot,
             unique_funder_count,
             is_allowlist_active,
+            dispute_pause_active,
+            dispute_pause_expiry,
             schema_version,
             sme_collateral_commitment,
             has_primary_attestation: primary_attestation_hash.is_some(),

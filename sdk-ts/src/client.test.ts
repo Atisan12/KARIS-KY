@@ -235,6 +235,9 @@ class StubSorobanClient implements SorobanRpcClient {
       sme_collateral_commitment: null,
       has_primary_attestation: false,
       attestation_log_length: 0,
+      dispute_pause_active: false,
+      dispute_pause_expiry: null,
+      allowlist_active: false,
     };
   }
 
@@ -710,6 +713,9 @@ describe("EscrowClient Integration Tests", () => {
       expect(summary.sme_collateral_commitment).toBeDefined();
       expect(summary.has_primary_attestation).toBeDefined();
       expect(summary.attestation_log_length).toBeDefined();
+      expect(summary.dispute_pause_active).toBeDefined();
+      expect(summary.dispute_pause_expiry).toBeDefined();
+      expect(summary.allowlist_active).toBeDefined();
 
       // Validate types
       expect(typeof summary.has_maturity_lock).toBe("boolean");
@@ -719,6 +725,9 @@ describe("EscrowClient Integration Tests", () => {
       expect(typeof summary.schema_version).toBe("number");
       expect(typeof summary.has_primary_attestation).toBe("boolean");
       expect(typeof summary.attestation_log_length).toBe("number");
+      expect(typeof summary.dispute_pause_active).toBe("boolean");
+      expect(summary.dispute_pause_expiry).toBeNull();
+      expect(typeof summary.allowlist_active).toBe("boolean");
     });
 
     it("should assert funding close snapshot structure", async () => {
