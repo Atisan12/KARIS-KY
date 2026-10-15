@@ -1296,6 +1296,101 @@ fn claim_investor_payout_succeeds_after_settle() {
     assert!(err.is_err(), "sweep without treasury auth must fail");
 }
 
+/// Deterministic scenario: sweeping terminal dust must not consume funds that
+/// are still owed to investors who have not yet claimed.
+///
+/// Three investors each contribute a third of `TARGET`; the escrow settles and
+/// `TARGET` tokens are minted into the contract.  The first investor claims,
+/// then the maximum permitted dust sweep runs.  The remaining two investors
+/// must still be able to claim their full payouts, and the contract balance
+/// after the sweep must cover both outstanding liabilities.
+#[test]
+fn test_sweep_terminal_dust_preserves_unclaimed_investor_liabilities() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let token = install_stellar_asset_token(&env);
+    let (contract_id, client) = deploy_with_id(&env);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let (_tok, treasury) = free_addresses(&env);
+
+    client.init(
+        &admin,
+        &String::from_str(&env, "SW_DUST_LIAB"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &0u64,
+        &token.id,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    // Three equal investors, each contributing a third of TARGET.
+    let inv_a = Address::generate(&env);
+    let inv_b = Address::generate(&env);
+    let inv_c = Address::generate(&env);
+    let third = TARGET / 3;
+    let remainder = TARGET - (third * 2);
+    client.fund(&inv_a, &third);
+    client.fund(&inv_b, &third);
+    client.fund(&inv_c, &remainder);
+
+    client.settle();
+
+    // Mint the full TARGET into the contract so payouts can be honoured.
+    token.stellar.mint(&contract_id, &TARGET);
+
+    // First investor claims.
+    client.claim_investor_payout(&inv_a);
+    assert!(client.is_investor_claimed(&inv_a));
+
+    // Compute the outstanding liabilities for the two unclaimed investors.
+    let payout_b = client.compute_investor_payout(&inv_b);
+    let payout_c = client.compute_investor_payout(&inv_c);
+    let outstanding = payout_b + payout_c;
+
+    // Sweep the maximum allowed amount, capped by the dust cap and the balance.
+    let balance_before = token.token.balance(&contract_id);
+    let sweep_amount = if balance_before < MAX_DUST_SWEEP_AMOUNT {
+        balance_before
+    } else {
+        MAX_DUST_SWEEP_AMOUNT
+    };
+    let treasury_before = token.token.balance(&treasury);
+    let swept = client.sweep_terminal_dust(&sweep_amount);
+
+    assert_eq!(swept, sweep_amount, "sweep must transfer the requested amount");
+    assert_eq!(
+        token.token.balance(&treasury),
+        treasury_before + swept,
+        "treasury must receive the swept amount"
+    );
+
+    // The remaining balance must still cover both unclaimed payouts.
+    let balance_after = token.token.balance(&contract_id);
+    assert!(
+        balance_after >= outstanding,
+        "contract balance after sweep must cover unclaimed investor liabilities"
+    );
+
+    // Both remaining investors can still claim successfully.
+    client.claim_investor_payout(&inv_b);
+    client.claim_investor_payout(&inv_c);
+
+    assert!(client.is_investor_claimed(&inv_a));
+    assert!(client.is_investor_claimed(&inv_b));
+    assert!(client.is_investor_claimed(&inv_c));
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // BUG-005: Token transfer safety checks in sweep_terminal_dust
 // ──────────────────────────────────────────────────────────────────────────────

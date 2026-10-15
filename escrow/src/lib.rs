@@ -3036,17 +3036,17 @@ impl LiquifactEscrow {
         let sweep_amt = amount.min(balance);
         ensure(&env, sweep_amt > 0, EscrowError::EffectiveSweepAmountZero);
 
-        // Liability floor (cancelled escrows only): sweep must not reduce the balance below
-        // principal still owed to investors who have not yet called refund().
+        // Liability floor: sweep must not reduce the balance below principal still owed to
+        // investors who have not yet redeemed their payout.
         //
-        // In settled (2) and withdrawn (3) states, disbursement is off-chain and
-        // distributed_principal stays 0, so the floor is not applicable there.
-        // In cancelled (4) state, refund() is the on-chain redemption path and increments
-        // distributed_principal atomically, making the invariant computable here.
+        // In settled (2) and withdrawn (3) states, `distributed_principal` is incremented by
+        // `claim_investor_payout` (and `withdraw`), so the outstanding liability is computable
+        // on-chain. In cancelled (4) state, `refund()` is the on-chain redemption path and
+        // increments `distributed_principal` atomically.
         //
         // outstanding = funded_amount - distributed_principal
         // Invariant: balance - sweep_amt >= outstanding
-        if escrow.status == 4 {
+        if escrow.status == 2 || escrow.status == 3 || escrow.status == 4 {
             let distributed: i128 = env
                 .storage()
                 .instance()
@@ -6575,6 +6575,13 @@ impl LiquifactEscrow {
         // Mark before emit — prevents re-emission on any re-entrant path.
         Self::set_persistent_investor_claimed(&env, investor.clone(), true);
 
+        // Track distributed principal so sweep_terminal_dust can enforce the liability floor.
+        let prev_distributed: i128 = env
+            .storage()
+            .instance()
+            .get(&DataKey::DistributedPrincipal)
+            .unwrap_or(0);
+
         // Check for pre-computed yield distribution (if auto-distribution is enabled)
         let mut total_payout = 0i128;
         if let Some(yield_dist) =
@@ -6676,6 +6683,13 @@ impl LiquifactEscrow {
 
         // Real-time slippage detection: compare expected vs actual yield
         Self::detect_yield_slippage(&env, investor.clone(), &escrow);
+
+        // Increment distributed principal by the payout amount so the liability floor
+        // in sweep_terminal_dust remains computable on-chain.
+        env.storage().instance().set(
+            &DataKey::DistributedPrincipal,
+            &prev_distributed.saturating_add(total_payout),
+        );
 
         InvestorPayoutClaimed {
             name: symbol_short!("inv_claim"),
