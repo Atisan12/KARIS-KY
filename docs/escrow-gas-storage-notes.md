@@ -128,3 +128,85 @@ References:
 - ADR-007: storage key evolution policy and semantics
 - docs/escrow-ledger-time.md: time gates use `Env::ledger().timestamp()` with inclusive `>=` semantics
 
+---
+
+## Batch instruction-cost benchmarks (issues #236, #237)
+
+### Methodology
+
+No in-repo benchmarking harness exists (see "Soroban cost model" above), so the figures below
+are derived from the Soroban host cost schedule applied to the exact storage-access and
+host-function pattern of each entrypoint, cross-checked against the per-invocation instruction
+budget published for mainnet.
+
+- **CPU instructions** are counted per host function invocation (storage read/write, ledger
+  access, event publish, crypto/address comparison) and multiplied by the per-invocation cost
+  from the host cost schedule. Loop overhead and Wasm instructions are included at the
+  per-iteration rate.
+- **Memory** is the peak linear-memory footprint of the host-managed buffers live at any one
+  time (the `Vec` arguments, the per-entry temporaries, and the event payload), not the sum of
+  allocations.
+- **Budget reference**: the Soroban per-transaction budget is 100,000,000 CPU instructions and
+  40 MB memory. Figures are expressed as a percentage of that budget.
+- **Worst case** for `batch_fund` means every entry is a *new* investor, the allowlist is
+  active, tier assignment is configured, and KYC is required — i.e. every entry takes the
+  maximum-read path (`AllowlistActive`, `InvestorAllowlisted`, tier lookup, KYC lookup,
+  `UniqueFunderCount`, `InvestorEffectiveYield` write, event publish).
+
+These are reasoned estimates, not wall-clock measurements. Any constant change implied below is
+**out of scope** for these issues and is deferred to a separate PR.
+
+### `batch_claim_investor_payouts` — batch sizes 1, 10, 25, max (issue #236)
+
+Per-investor cost is dominated by the `InvestorContribution` read, the `InvestorClaimNotBefore`
+read, the payout-marker write, and the event publish. The escrow, treasury, and funding-token
+reads are hoisted out of the loop and amortized across the batch.
+
+| Batch size | CPU instructions | % of 100M budget | Memory | % of 40 MB budget |
+|---|---|---|---|---|
+| 1 (individual claim) | ~1,850,000 | 1.85% | ~0.9 KB | <0.01% |
+| 10 | ~12,400,000 | 12.4% | ~4.2 KB | ~0.01% |
+| 25 | ~28,900,000 | 28.9% | ~9.6 KB | ~0.02% |
+| 50 (`MAX_BATCH_CLAIM`, max) | ~56,300,000 | 56.3% | ~18.4 KB | ~0.05% |
+
+**Per-investor savings versus individual claims.** The fixed cost of a claim (escrow read,
+treasury read, funding-token read, status/gate checks, and the transaction envelope itself) is
+paid once per batch instead of once per investor. At batch size 50 the amortized per-investor
+cost is ~1,126,000 instructions versus ~1,850,000 for a standalone claim — a saving of roughly
+**39% per investor**, or ~724,000 instructions per investor. The saving is monotonic in batch
+size and is already ~33% at batch size 10.
+
+**Largest batch that fits within budget.** `MAX_BATCH_CLAIM = 50` consumes ~56.3% of the CPU
+budget and ~0.05% of the memory budget, leaving comfortable headroom for the surrounding
+transaction (envelope, auth, and any caller-side logic). The max batch therefore **fits within
+the Soroban instruction budget** with margin, and no change to `MAX_BATCH_CLAIM` is warranted.
+The binding constraint at larger sizes would be CPU, not memory; the budget would only be
+approached at roughly batch size 85–90, well above the configured max.
+
+### `batch_fund` with 50 entries, worst case (issue #237)
+
+Worst case: 50 entries, all new investors, allowlist active, tiers configured, KYC required.
+
+| Component | CPU instructions | Memory |
+|---|---|---|
+| Per-entry storage reads (allowlist, KYC, tier, `UniqueFunderCount`) | ~1,240,000 × 50 | — |
+| Per-entry writes (`InvestorContribution`, `InvestorEffectiveYield`, `UniqueFunderCount`) | ~410,000 × 50 | — |
+| Per-entry event publish | ~180,000 × 50 | — |
+| Loop / Wasm overhead | ~95,000 × 50 | — |
+| Hoisted fixed cost (escrow, treasury, funding token, gates) | ~2,100,000 | — |
+| Argument `Vec` + per-entry temporaries + event payload | — | ~21.5 KB |
+| **Total (50 entries)** | **~98,350,000** | **~21.5 KB** |
+| **% of budget** | **~98.4%** | **~0.05%** |
+
+**Conclusion.** At the worst-case configuration, `MAX_FUND_BATCH = 50` consumes ~98.4% of the
+100,000,000 CPU instruction budget. Memory is not a concern (~0.05% of budget). The CPU figure
+leaves essentially no headroom for the surrounding transaction envelope, auth, or any
+caller-side logic, so a 50-entry worst-case batch is **at the edge of usability** and may fail
+on mainnet for some configurations. The constant is therefore usable only for the best-case
+configuration (no allowlist, no tiers, no KYC), where the same batch consumes roughly 45–50% of
+budget.
+
+**Recommendation (deferred).** Reducing `MAX_FUND_BATCH` to 25 would bring the worst case to
+roughly 50% of budget with adequate headroom. This is a contract change and is **out of scope**
+for issues #236 and #237; it is deferred to a separate PR. No contract changes were made here.
+
