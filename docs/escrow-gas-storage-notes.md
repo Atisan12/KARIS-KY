@@ -7,8 +7,11 @@ Soroban charges CPU and memory instructions per host function invocation. Instan
 duplicate reads of the same key within a single host function call directly reduces the
 instruction budget consumed per transaction — without changing observable behavior.
 
-No benchmarking harness exists in this repository. `cargo llvm-cov` measures line coverage only.
-Cost savings below are reasoned from the Soroban host cost schedule, not measured wall-clock time.
+No wall-clock benchmarking harness exists in this repository. `cargo llvm-cov` measures line
+coverage only. Storage-op counts below are obtained from the in-repo storage-op counting harness
+(`escrow/src/test.rs`, `storage_op_counts` helper), which instruments the storage layer to count
+`get`/`set` calls per entrypoint invocation. Cost savings are otherwise reasoned from the Soroban
+host cost schedule, not measured wall-clock time.
 
 ---
 
@@ -46,6 +49,33 @@ required. A comment was added at each site documenting this decision.
 
 These are micro-optimizations. The primary value is correctness hygiene and reduced instruction
 budget on the hot `fund` path, which is called once per investor deposit.
+
+---
+
+## Batch funding — single escrow read/write per call (issue #239)
+
+`batch_fund` and `fund_batch` previously called `fund_impl` once per entry, and `fund_impl`
+performed its own `DataKey::Escrow` read and write on every call. For a batch of N entries that
+produced N read/write pairs of the same instance key.
+
+`fund_impl` was refactored to accept an in-memory `Escrow` and return the updated `Escrow`, so the
+batch path loads `DataKey::Escrow` once, applies every entry in memory, and writes the key once.
+The single-entry `fund` / `fund_with_commitment` paths are unchanged in behavior: they read once,
+call `fund_impl`, and write the returned escrow once.
+
+### Before / after storage ops for `DataKey::Escrow`
+
+Counts are per `batch_fund` / `fund_batch` call, measured with the storage-op counting harness.
+
+| Batch size | Escrow reads before | Escrow reads after | Escrow writes before | Escrow writes after |
+|---|---|---|---|---|
+| 1 | 1 | 1 | 1 | 1 |
+| 10 | 10 | 1 | 10 | 1 |
+| 50 | 50 | 1 | 50 | 1 |
+
+Net effect: **−(N−1) reads and −(N−1) writes** of `DataKey::Escrow` per batch of N entries.
+No semantic change — the same final escrow state is persisted, and per-entry validation,
+events, and error behavior are identical.
 
 ---
 

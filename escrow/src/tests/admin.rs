@@ -28,7 +28,9 @@ fn test_update_maturity_success() {
         &None,
         &None,
     );
-    let updated = client.update_maturity(&2000u64);
+    // Extensions now require the propose/confirm flow; shortening stays immediate.
+    client.propose_maturity_extension(&2000u64);
+    let updated = client.confirm_maturity_extension();
     assert_eq!(updated.maturity, 2000u64);
     assert_eq!(updated.status, 0);
 }
@@ -59,7 +61,7 @@ fn test_update_maturity_wrong_state() {
         &None,
     );
     client.fund(&investor, &1_000i128);
-    client.update_maturity(&2000u64);
+    client.propose_maturity_extension(&2000u64);
 }
 
 #[test]
@@ -90,7 +92,172 @@ fn test_update_maturity_unauthorized() {
         &None,
     );
     env.mock_auths(&[]);
-    client.update_maturity(&2000u64);
+    client.propose_maturity_extension(&2000u64);
+}
+
+// ── Issue #241: update_maturity extension guard (propose/confirm + delay) ─────
+
+/// Extending maturity must be rejected until the minimum delay has elapsed.
+#[test]
+#[should_panic]
+fn test_update_maturity_extension_rejected_before_delay() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    client.propose_maturity_extension(&2000u64);
+    // No ledger time advance — confirmation must be rejected.
+    client.confirm_maturity_extension();
+}
+
+/// Extending maturity succeeds once the minimum delay has elapsed.
+#[test]
+fn test_update_maturity_extension_accepted_after_delay() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let proposed_at = env.ledger().timestamp();
+    client.propose_maturity_extension(&2000u64);
+
+    env.ledger()
+        .set_timestamp(proposed_at + crate::MATURITY_EXTENSION_DELAY_SECS);
+
+    let updated = client.confirm_maturity_extension();
+    assert_eq!(updated.maturity, 2000u64);
+}
+
+/// Shortening maturity (new < current) must remain immediate and unaffected by
+/// the extension guard.
+#[test]
+fn test_update_maturity_shortening_remains_immediate() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    // default_init sets maturity to 1000; shorten to 500 immediately.
+    let updated = client.update_maturity(&500u64);
+    assert_eq!(updated.maturity, 500u64);
+}
+
+/// Unauthorized callers cannot propose a maturity extension.
+#[test]
+#[should_panic]
+fn test_propose_maturity_extension_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    env.mock_auths(&[]);
+    client.propose_maturity_extension(&2000u64);
+}
+
+/// Unauthorized callers cannot confirm a maturity extension.
+#[test]
+#[should_panic]
+fn test_confirm_maturity_extension_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    let proposed_at = env.ledger().timestamp();
+    client.propose_maturity_extension(&2000u64);
+    env.ledger()
+        .set_timestamp(proposed_at + crate::MATURITY_EXTENSION_DELAY_SECS);
+    env.mock_auths(&[]);
+    client.confirm_maturity_extension();
+}
+
+/// Confirming without a prior proposal must be rejected.
+#[test]
+#[should_panic]
+fn test_confirm_maturity_extension_without_proposal_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    client.confirm_maturity_extension();
+}
+
+/// When a guardian is configured, the guardian can confirm the extension
+/// instead of waiting for the delay.
+#[test]
+fn test_update_maturity_extension_guardian_confirmation() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    let guardian = Address::generate(&env);
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "MATG001"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &1000u64,
+        &Address::generate(&env),
+        &Some(guardian.clone()),
+        &Address::generate(&env),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    client.propose_maturity_extension(&2000u64);
+    // Guardian confirms immediately, before the delay elapses.
+    let updated = client.confirm_maturity_extension_as_guardian();
+    assert_eq!(updated.maturity, 2000u64);
+}
+
+/// Guardian confirmation must be rejected when no guardian is configured.
+#[test]
+#[should_panic]
+fn test_update_maturity_extension_guardian_absent_panics() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    client.propose_maturity_extension(&2000u64);
+    client.confirm_maturity_extension_as_guardian();
+}
+
+/// Guardian confirmation must be rejected when the caller is not the guardian.
+#[test]
+#[should_panic]
+fn test_update_maturity_extension_guardian_unauthorized() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let (client, admin, sme) = setup(&env);
+    let guardian = Address::generate(&env);
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "MATG002"),
+        &sme,
+        &TARGET,
+        &800i64,
+        &1000u64,
+        &Address::generate(&env),
+        &Some(guardian),
+        &Address::generate(&env),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+    client.propose_maturity_extension(&2000u64);
+    env.mock_auths(&[]);
+    client.confirm_maturity_extension_as_guardian();
 }
 
 #[test]
@@ -1019,7 +1186,10 @@ fn test_update_maturity_event_fields() {
         &None,
     );
 
-    client.update_maturity(&2000u64);
+    client.propose_maturity_extension(&2000u64);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + crate::MATURITY_EXTENSION_DELAY_SECS);
+    client.confirm_maturity_extension();
 
     assert_eq!(
         env.events().all(),
@@ -1067,7 +1237,7 @@ fn test_update_maturity_fails_when_funded() {
         &None,
     );
     client.fund(&investor, &5_000i128); // status → 1 (funded)
-    client.update_maturity(&2000u64);
+    client.propose_maturity_extension(&2000u64);
 }
 
 /// `update_maturity` must be rejected when the escrow is **settled**
@@ -1105,7 +1275,7 @@ fn test_update_maturity_fails_when_settled() {
     );
     client.fund(&investor, &5_000i128); // status → 1
     client.settle(); // status → 2
-    client.update_maturity(&2000u64);
+    client.propose_maturity_extension(&2000u64);
 }
 
 /// `update_maturity` must be rejected when the escrow is **withdrawn**
@@ -1117,7 +1287,7 @@ fn test_update_maturity_fails_when_withdrawn() {
     env.mock_all_auths();
     let (client, _escrow_id, _sme) = init_and_fund_with_real_token(&env, 5_000i128, "MAT004");
     client.withdraw(); // status → 3
-    client.update_maturity(&2000u64);
+    client.propose_maturity_extension(&2000u64);
 }
 
 /// Setting maturity to zero is valid — it means no maturity gate.
@@ -1269,8 +1439,15 @@ fn test_update_maturity_twice_overwrites() {
         &None,
     );
 
-    client.update_maturity(&2000u64);
-    let updated = client.update_maturity(&3000u64);
+    client.propose_maturity_extension(&2000u64);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + crate::MATURITY_EXTENSION_DELAY_SECS);
+    client.confirm_maturity_extension();
+
+    client.propose_maturity_extension(&3000u64);
+    env.ledger()
+        .set_timestamp(env.ledger().timestamp() + crate::MATURITY_EXTENSION_DELAY_SECS);
+    let updated = client.confirm_maturity_extension();
     assert_eq!(updated.maturity, 3000u64);
     assert_eq!(client.get_escrow().maturity, 3000u64);
 }
