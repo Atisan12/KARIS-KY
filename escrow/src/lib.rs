@@ -3092,9 +3092,17 @@ impl LiquifactEscrow {
     /// Archived escrows remain accessible but should be excluded from active-monitoring queries
     /// by off-chain indexers.
     ///
+    /// # Preconditions
+    /// Archiving a **settled** escrow (status `2`) is rejected while any investor payout remains
+    /// unclaimed: the escrow must have no outstanding investor liabilities before it can be
+    /// archived. Callers should ensure all investors have claimed via
+    /// [`LiquifactEscrow::claim_investor_payout`] (or the batch/delegate equivalents) first.
+    ///
     /// # Errors
     /// Emits [`EscrowError::ArchiveNotTerminal`] if the escrow is not in a terminal state.
     /// Emits [`EscrowError::EscrowAlreadyArchived`] if already status `5`.
+    /// Emits [`EscrowError::ArchiveBlockedByUnclaimedPayouts`] if the escrow is settled but
+    /// investor payouts remain unclaimed.
     pub fn archive_escrow(env: Env) -> InvoiceEscrow {
         let mut escrow = Self::load_escrow_require_admin(&env);
 

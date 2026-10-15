@@ -1766,6 +1766,93 @@ fn no_state_mutation_possible_after_withdraw() {
     }
 }
 // ──────────────────────────────────────────────────────────────────────────────
+// `archive_escrow` — unclaimed-payout guard and terminal-state behavior
+// ──────────────────────────────────────────────────────────────────────────────
+
+/// `archive_escrow` must panic with `ArchiveBlockedByUnclaimedPayouts` when a
+/// settled escrow still has at least one investor who has not claimed.
+#[test]
+#[should_panic(expected = "ArchiveBlockedByUnclaimedPayouts")]
+fn archive_escrow_blocked_by_unclaimed_payouts() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    // Settle with a single investor who never claims.
+    let _investor = settle_escrow(&client, &env);
+
+    client.archive_escrow();
+}
+
+/// `archive_escrow` must succeed once every investor has claimed their payout.
+#[test]
+fn archive_escrow_succeeds_after_all_claims() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    let investor = settle_escrow(&client, &env);
+
+    client.claim_investor_payout(&investor);
+    assert!(client.is_investor_claimed(&investor));
+
+    client.archive_escrow();
+    assert_eq!(
+        client.get_escrow().status,
+        5u32,
+        "status must be 5 (archived) after archive_escrow"
+    );
+}
+
+/// `archive_escrow` must succeed for a withdrawn (status 3) escrow regardless
+/// of claim state — the settlement path never ran, so there are no payouts.
+#[test]
+fn archive_escrow_succeeds_for_withdrawn_escrow() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    fund_to_target(&client, &env);
+    client.withdraw(&sme); // status → 3
+
+    client.archive_escrow();
+    assert_eq!(client.get_escrow().status, 5u32);
+}
+
+/// `archive_escrow` must succeed for a cancelled (status 4) escrow regardless
+/// of claim state.
+#[test]
+fn archive_escrow_succeeds_for_cancelled_escrow() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    fund_to_target(&client, &env);
+    client.cancel(&sme); // status → 4
+
+    client.archive_escrow();
+    assert_eq!(client.get_escrow().status, 5u32);
+}
+
+/// `archive_escrow` must be idempotent: calling it again on an already-archived
+/// (status 5) escrow must not panic and must leave the status at 5.
+#[test]
+fn archive_escrow_is_idempotent_when_already_archived() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+    fund_to_target(&client, &env);
+    client.withdraw(&sme); // status → 3
+
+    client.archive_escrow();
+    assert_eq!(client.get_escrow().status, 5u32);
+
+    // Second call must be a no-op, not a panic.
+    client.archive_escrow();
+    assert_eq!(
+        client.get_escrow().status,
+        5u32,
+        "archive_escrow must be idempotent when already archived"
+    );
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // `partial_settle` tests
 // ──────────────────────────────────────────────────────────────────────────────
 
