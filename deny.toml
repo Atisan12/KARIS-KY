@@ -1,11 +1,10 @@
 [graph]
 targets = [
-    { path = "Cargo.lock", test = "all" },
+    { triple = "wasm32-unknown-unknown" },
 ]
+all-features = true
 
 [advisories]
-db-path = "~/.cargo/advisory-db"
-db-urls = ["https://github.com/rustsec/advisory-db"]
 vulnerability = "deny"
 unmaintained = "warn"
 yanked = "deny"
@@ -13,10 +12,6 @@ notice = "warn"
 ignore = []
 
 [licenses]
-unlicensed = "deny"
-allow-osi-fsf-free = "either"
-copyleft = "deny"
-default = "deny"
 confidence-threshold = 0.8
 allow = [
     "MIT",
@@ -26,32 +21,18 @@ allow = [
     "BSD-3-Clause",
     "ISC",
     "Unicode-DFS-2016",
-    "Unicode-3.0",
     "Zlib",
     "MPL-2.0",
     "CC0-1.0",
-    "0BSD",
-    "BSL-1.0",
 ]
-exceptions = []
 
 [bans]
 multiple-versions = "warn"
 wildcards = "deny"
-highlight = "all"
-workspace-default-features = "allow"
-external-default-features = "allow"
-allow = []
-deny = [
-    { name = "openssl" },
-    { name = "openssl-sys" },
-    { name = "native-tls" },
-]
-skip = []
-skip-tree = []
+
+[bans.deny]
 
 [sources]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
