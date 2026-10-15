@@ -259,6 +259,9 @@ A `#[contracttype]` struct containing:
 - `funding_close_snapshot: EscrowCloseSnapshot` — Custom option-like representation of the captured pro-rata denominator snapshot (detailed below).
 - `unique_funder_count: u32` — Distinct address count of contributors.
 - `is_allowlist_active: bool` — True if the investor allowlist is active.
+- `allowlist_active: bool` — True if the investor allowlist is active. Mirrors `is_allowlist_active`; provided as a convenience alias for consumers that read the summary field directly.
+- `dispute_pause_active: bool` — True when a dispute pause is currently in effect. Reflects the **auto-expiry-aware** state: a pause whose expiry has already passed is reported as inactive even if it was never explicitly cleared.
+- `dispute_pause_expiry: Option<u64>` — The ledger timestamp at which the active dispute pause expires, or `None` when no pause is active. Because the value is auto-expiry-aware, this is `None` whenever `dispute_pause_active` is `false`.
 - `schema_version: u32` — The schema version of the contract state.
 - `sme_collateral_commitment: Option<SmeCollateralCommitment>` — SME collateral pledge metadata, or `None` when never recorded.
 - `has_primary_attestation: bool` — True when a primary attestation hash has been bound via `bind_primary_attestation_hash`.
