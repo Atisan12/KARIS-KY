@@ -3635,6 +3635,154 @@ fn test_fund_batch_preserves_event_semantics() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// Issue #237: batch_fund budget benchmark (worst-case configuration)
+// ─────────────────────────────────────────────────────────────────────────────
+//
+// MAX_FUND_BATCH = 50 was chosen without a published budget measurement. This
+// benchmark exercises `batch_fund` with exactly MAX_FUND_BATCH entries under the
+// worst-case configuration (allowlist enabled, tiered yield configured, KYC
+// checks active) and reports the CPU instruction count and memory usage against
+// the Soroban mainnet instruction budget.
+//
+// Run in release mode with:
+//     cargo test -p escrow --release -- --ignored --nocapture bench_batch_fund
+//
+// Any adjustment to MAX_FUND_BATCH is explicitly out of scope for this issue and
+// is deferred to a separate PR. No contract changes are made here.
+
+/// Soroban mainnet per-transaction CPU instruction budget (as of protocol 22).
+/// Source: `soroban-env-host` `BudgetImpl` / network config `tx_max_instructions`.
+const SOROBAN_TX_MAX_INSTRUCTIONS: u64 = 100_000_000;
+
+/// Soroban mainnet per-transaction memory budget in bytes.
+/// Source: network config `tx_memory_limit`.
+const SOROBAN_TX_MEMORY_LIMIT: u64 = 40 * 1024 * 1024;
+
+/// Worst-case `batch_fund` budget benchmark: MAX_FUND_BATCH entries with
+/// allowlist enabled, tiered yield configured, and KYC checks active.
+///
+/// Gated behind `#[ignore]` so it does not run in the default test suite; it is
+/// intended to be executed in release mode with `--ignored --nocapture`.
+#[test]
+#[ignore]
+fn bench_batch_fund_50_entries_worst_case() {
+    use soroban_sdk::testutils::Ledger as _;
+
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let (tok, tre) = free_addresses(&env);
+
+    // Worst-case configuration: tiered yield ladder (forces tier selection on
+    // every entry) plus KYC and allowlist requirements.
+    let mut tiers = SorobanVec::new(&env);
+    tiers.push_back(YieldTier {
+        min_lock_secs: 100,
+        yield_bps: 900,
+    });
+    tiers.push_back(YieldTier {
+        min_lock_secs: 500,
+        yield_bps: 1100,
+    });
+
+    // Target large enough that all MAX_FUND_BATCH entries are processed without
+    // the escrow transitioning to funded mid-batch.
+    let target = 1_000_000_000_000i128;
+
+    client.init(
+        &admin,
+        &String::from_str(&env, "BENCH237"),
+        &sme,
+        &target,
+        &800i64,
+        &0u64,
+        &tok,
+        &None,
+        &tre,
+        &Some(tiers),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    // Enable the worst-case gating: KYC required and allowlist enforced.
+    client.set_kyc_required(&true);
+    client.set_allowlist_enabled(&true);
+
+    // Build exactly MAX_FUND_BATCH entries, each with a distinct, allowlisted,
+    // KYC-approved investor.
+    let mut entries = SorobanVec::new(&env);
+    for _ in 0..MAX_FUND_BATCH {
+        let inv = Address::generate(&env);
+        client.set_investor_kyc(&inv, &true);
+        client.set_allowlisted(&inv, &true);
+        entries.push_back((inv, 1_000i128));
+    }
+
+    // Measure CPU instruction count and memory usage for the batch call.
+    env.cost_estimate().budget().reset_unlimited();
+    let before = env.cost_estimate().budget();
+
+    let result = client.fund_batch(&entries);
+
+    let cpu_instructions = before.cpu_instruction_cost();
+    let memory_bytes = before.memory_bytes_cost();
+
+    // Sanity: all entries were processed.
+    assert_eq!(
+        result.funded_amount,
+        (MAX_FUND_BATCH as i128) * 1_000i128,
+        "all MAX_FUND_BATCH entries must be processed"
+    );
+
+    // Document the measurement against the mainnet budget.
+    println!("── batch_fund budget benchmark (issue #237) ──");
+    println!("entries:                 {MAX_FUND_BATCH}");
+    println!("configuration:           allowlist + tiers + KYC");
+    println!("cpu instructions:        {cpu_instructions}");
+    println!("cpu budget (mainnet):    {SOROBAN_TX_MAX_INSTRUCTIONS}");
+    println!(
+        "cpu utilization:         {:.2}%",
+        (cpu_instructions as f64 / SOROBAN_TX_MAX_INSTRUCTIONS as f64) * 100.0
+    );
+    println!("memory bytes:            {memory_bytes}");
+    println!("memory budget (mainnet): {SOROBAN_TX_MEMORY_LIMIT}");
+    println!(
+        "memory utilization:      {:.2}%",
+        (memory_bytes as f64 / SOROBAN_TX_MEMORY_LIMIT as f64) * 100.0
+    );
+
+    let fits_cpu = cpu_instructions <= SOROBAN_TX_MAX_INSTRUCTIONS;
+    let fits_memory = memory_bytes <= SOROBAN_TX_MEMORY_LIMIT;
+    println!(
+        "fits mainnet budget:     {}",
+        if fits_cpu && fits_memory {
+            "YES"
+        } else {
+            "NO"
+        }
+    );
+
+    assert!(
+        fits_cpu,
+        "batch_fund with {MAX_FUND_BATCH} entries exceeds the CPU instruction budget: \
+         {cpu_instructions} > {SOROBAN_TX_MAX_INSTRUCTIONS}"
+    );
+    assert!(
+        fits_memory,
+        "batch_fund with {MAX_FUND_BATCH} entries exceeds the memory budget: \
+         {memory_bytes} > {SOROBAN_TX_MEMORY_LIMIT}"
+    );
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // #205: max_unique_investors cap enforced at fund() time
 // ─────────────────────────────────────────────────────────────────────────────
 
