@@ -120,6 +120,9 @@ class StubSorobanClient implements SorobanRpcClient {
     if (functionName === "get_funding_close_snapshot") {
       return this.createMockFundingCloseSnapshot();
     }
+    if (functionName === "get_investor_position") {
+      return this.createMockInvestorPosition();
+    }
 
     throw new Error(`Unexpected simulate call: ${functionName}`);
   }
@@ -247,6 +250,16 @@ class StubSorobanClient implements SorobanRpcClient {
       funding_target: "100000000000",
       closed_at_ledger_timestamp: "1700000000",
       closed_at_ledger_sequence: 123456,
+    };
+  }
+
+  private createMockInvestorPosition(): unknown {
+    return {
+      contribution: "500000000",
+      yield_bps: "800",
+      claim_not_before: "1700000000",
+      claimed: false,
+      refunded: false,
     };
   }
 }
@@ -878,6 +891,27 @@ describe("EscrowClient Integration Tests", () => {
       expect(log[0].functionName).toBe("is_investor_refunded");
       expect(log[0].args[0]).toBe(INVESTOR_1);
       expect(typeof refunded).toBe("boolean");
+    });
+
+    it("should retrieve the aggregated investor position", async () => {
+      stub.clearInvocationLog();
+
+      const position = await client.getInvestorPosition(INVESTOR_1);
+
+      const log = stub.getInvocationLog();
+      expect(log).toHaveLength(1);
+      const getCall = log[0];
+
+      expect(getCall.method).toBe("simulate");
+      expect(getCall.functionName).toBe("get_investor_position");
+      expect(getCall.args[0]).toBe(INVESTOR_1);
+
+      expect(position).toBeDefined();
+      expect(position.contribution).toBe("500000000");
+      expect(position.yield_bps).toBe("800");
+      expect(position.claim_not_before).toBe("1700000000");
+      expect(position.claimed).toBe(false);
+      expect(position.refunded).toBe(false);
     });
   });
 

@@ -358,6 +358,7 @@
     { "name": "get_pending_admin", "description": "Read pending admin in handover", "returns": { "type": "Option<Address>" } },
     { "name": "get_legal_hold", "description": "Check if legal hold is active", "returns": { "type": "bool" } },
     { "name": "get_contribution", "description": "Read principal for one investor", "params": [{ "name": "investor", "type": "Address" }], "returns": { "type": "i128" } },
+    { "name": "get_investor_position", "description": "Read aggregated position for one investor", "params": [{ "name": "investor", "type": "Address" }], "returns": { "type": "InvestorPosition" } },
     { "name": "get_unique_funder_count", "description": "Count of distinct investor addresses", "returns": { "type": "u32" } },
     { "name": "get_funding_close_snapshot", "description": "Read immutable funding-close snapshot (null before funded)", "returns": { "type": "Option<FundingCloseSnapshot>" } },
     { "name": "get_investor_yield_bps", "description": "Read effective yield for one investor", "params": [{ "name": "investor", "type": "Address" }], "returns": { "type": "i64" } },
@@ -422,6 +423,17 @@
         { "name": "maturity", "type": "u64", "description": "Ledger timestamp; 0 = no maturity gate" },
         { "name": "status", "type": "u32", "description": "0=open, 1=funded, 2=settled, 3=withdrawn, 4=cancelled" },
         { "name": "guardian", "type": "Option<Address>", "description": "Optional independent legal-hold confirmation authority" }
+      ]
+    },
+    "InvestorPosition": {
+      "description": "Aggregated read-only view of a single investor's position",
+      "fields": [
+        { "name": "investor", "type": "Address", "description": "Investor address" },
+        { "name": "contribution", "type": "i128", "description": "Principal recorded for the investor" },
+        { "name": "yield_bps", "type": "i64", "description": "Effective yield in basis points for the investor" },
+        { "name": "claim_not_before", "type": "u64", "description": "Commitment lock timestamp; 0 when unlocked" },
+        { "name": "claimed", "type": "bool", "description": "Whether the investor has recorded a payout claim" },
+        { "name": "refunded", "type": "bool", "description": "Whether the investor has been refunded" }
       ]
     },
     "YieldTier": {

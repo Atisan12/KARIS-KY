@@ -36,6 +36,7 @@ export {
   type SmeCollateralCommitment,
   type EscrowSummary,
   type InvestorCapStatus,
+  type InvestorPosition,
   type EscrowSnapshot,
   type ErrorDiagnostic,
   type EscrowTemplate,
