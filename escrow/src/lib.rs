@@ -5193,7 +5193,10 @@ impl LiquifactEscrow {
     /// Emits typed [`EscrowError`] codes for invalid amount, legal hold, closed funding state,
     /// allowlist rejection, cap violations, and checked-arithmetic overflow.
     pub fn fund(env: Env, investor: Address, amount: i128) -> InvoiceEscrow {
-        Self::fund_impl(env, investor, amount, true, 0)
+        let mut escrow = Self::get_escrow(env.clone());
+        Self::fund_impl(&env, &mut escrow, investor, amount, true, 0);
+        env.storage().instance().set(&DataKey::Escrow, &escrow);
+        escrow
     }
 
     /// First deposit only (per investor): optional longer lock and tier ladder from [`DataKey::YieldTierTable`].
@@ -5209,7 +5212,10 @@ impl LiquifactEscrow {
         amount: i128,
         committed_lock_secs: u64,
     ) -> InvoiceEscrow {
-        Self::fund_impl(env, investor, amount, false, committed_lock_secs)
+        let mut escrow = Self::get_escrow(env.clone());
+        Self::fund_impl(&env, &mut escrow, investor, amount, false, committed_lock_secs);
+        env.storage().instance().set(&DataKey::Escrow, &escrow);
+        escrow
     }
 
     /// Batch funding entrypoint: record multiple investor principals in a single call.
@@ -5240,16 +5246,16 @@ impl LiquifactEscrow {
         ensure(&env, n > 0, EscrowError::FundingBatchEmpty);
         ensure(&env, n <= MAX_FUND_BATCH, EscrowError::FundingBatchTooLarge);
 
+        // Load the escrow once before the loop; apply all entries in memory and
+        // persist exactly once after the loop to avoid per-entry read/write pairs.
         let mut escrow = Self::get_escrow(env.clone());
 
         for i in 0..n {
             let (investor, amount) = entries.get(i).unwrap();
-
-            // Call fund_impl for each entry, but we need to reconstruct the escrow
-            // after each call. However, fund_impl returns the updated escrow,
-            // so we capture it for the next iteration.
-            escrow = Self::fund_impl(env.clone(), investor, amount, true, 0);
+            Self::fund_impl(&env, &mut escrow, investor, amount, true, 0);
         }
+
+        env.storage().instance().set(&DataKey::Escrow, &escrow);
 
         escrow
     }
@@ -5296,16 +5302,22 @@ impl LiquifactEscrow {
         ensure(&env, n > 0, EscrowError::FundingBatchEmpty);
         ensure(&env, n <= MAX_FUND_BATCH, EscrowError::FundingBatchTooLarge);
 
-        // Track how much principal this batch call contributes in total.
-        let funded_before: i128 = Self::get_escrow(env.clone()).funded_amount;
-
+        // Load the escrow once before the loop; apply all entries in memory and
+        // persist exactly once after the loop to avoid per-entry read/write pairs.
         let mut escrow = Self::get_escrow(env.clone());
+
+        // Track how much principal this batch call contributes in total.
+        let funded_before: i128 = escrow.funded_amount;
+
         for i in 0..n {
             let (investor, amount) = contributions.get(i).unwrap();
-            // fund_impl handles per-investor require_auth(), all validation, storage
-            // writes, per-entry events, and status transitions.
-            escrow = Self::fund_impl(env.clone(), investor, amount, true, 0);
+            // fund_impl handles per-investor require_auth(), all validation,
+            // per-investor persistent writes, per-entry events, and status transitions.
+            Self::fund_impl(&env, &mut escrow, investor, amount, true, 0);
         }
+
+        // Persist the escrow exactly once after the loop.
+        env.storage().instance().set(&DataKey::Escrow, &escrow);
 
         // Total principal credited by this batch call.
         let total_funded_amount = escrow
@@ -5355,18 +5367,26 @@ impl LiquifactEscrow {
         }
     }
 
+    /// Apply a single funding entry to the in-memory `escrow` snapshot.
+    ///
+    /// This helper performs **no** `DataKey::Escrow` read or write: the caller is
+    /// responsible for loading the escrow once before calling (and persisting it once
+    /// after, for batch paths). Only per-investor persistent writes and event emissions
+    /// happen here, so `batch_fund` / `fund_batch` avoid N read/write pairs of the same
+    /// instance key.
     fn fund_impl(
-        env: Env,
+        env: &Env,
+        escrow: &mut InvoiceEscrow,
         investor: Address,
         amount: i128,
         simple_fund: bool,
         committed_lock_secs: u64,
-    ) -> InvoiceEscrow {
+    ) {
         investor.require_auth();
 
         // Amounts must always be positive. This check is independent of any floor
         // and ensures zero contributions are always rejected.
-        ensure(&env, amount > 0, EscrowError::FundingAmountNotPositive);
+        ensure(env, amount > 0, EscrowError::FundingAmountNotPositive);
 
         // Fetch the minimum contribution floor. Absence (None) is semantically equivalent to 0.
         // This makes the floor validation explicit: amounts must always be >= floor,
@@ -5381,28 +5401,26 @@ impl LiquifactEscrow {
         // Always applied (not conditional on floor > 0) to make semantics explicit:
         // the absence-equals-zero policy is centralized here.
         ensure(
-            &env,
+            env,
             amount >= floor,
             EscrowError::FundingBelowMinContribution,
         );
 
-        // env.clone(): env is used again after this call for storage writes and publish.
-        let mut escrow = Self::get_escrow(env.clone());
         // Legal hold check is intentionally after the escrow read: the escrow is needed for
         // status and yield_bps regardless, and hoisting the hold check before the escrow read
         // would not reduce storage operations (both keys are always read on this path).
         ensure(
-            &env,
-            !Self::legal_hold_active(&env),
+            env,
+            !Self::legal_hold_active(env),
             EscrowError::LegalHoldBlocksFunding,
         );
         ensure(
-            &env,
-            !Self::is_dispute_paused_for_mutation(&env),
+            env,
+            !Self::is_dispute_paused_for_mutation(env),
             EscrowError::DisputePausedBlocksFunding,
         );
         ensure(
-            &env,
+            env,
             escrow.status == 0,
             EscrowError::EscrowNotOpenForFunding,
         );
@@ -5410,7 +5428,7 @@ impl LiquifactEscrow {
         // Check funding deadline
         if let Some(deadline) = env.storage().instance().get(&DataKey::FundingDeadline) {
             ensure(
-                &env,
+                env,
                 env.ledger().timestamp() <= deadline,
                 EscrowError::FundingDeadlinePassed,
             );
@@ -5423,7 +5441,7 @@ impl LiquifactEscrow {
             .instance()
             .get(&DataKey::FundingPaused)
             .unwrap_or(false);
-        ensure(&env, !funding_paused, EscrowError::FundingIsPaused);
+        ensure(env, !funding_paused, EscrowError::FundingIsPaused);
 
         // Velocity gate: if max_funding_rate is configured, enforce per-ledger cap.
         if let Some(rate) = env
@@ -5448,7 +5466,7 @@ impl LiquifactEscrow {
 
             let new_ledger_total = ledger_funded
                 .checked_add(amount)
-                .unwrap_or_else(|| fail(&env, EscrowError::InvestorContributionOverflow));
+                .unwrap_or_else(|| fail(env, EscrowError::InvestorContributionOverflow));
 
             if new_ledger_total > rate as i128 {
                 // Auto-pause: velocity exceeded — block further funding.
@@ -5461,9 +5479,9 @@ impl LiquifactEscrow {
                     max_funding_rate: rate,
                     ledger_funded,
                 }
-                .publish(&env);
+                .publish(env);
 
-                fail(&env, EscrowError::FundingVelocityExceeded);
+                fail(env, EscrowError::FundingVelocityExceeded);
             }
 
             // Update velocity tracking.
@@ -5477,22 +5495,22 @@ impl LiquifactEscrow {
 
         if Self::is_allowlist_active(env.clone()) {
             ensure(
-                &env,
+                env,
                 Self::is_investor_allowlisted(env.clone(), investor.clone()),
                 EscrowError::InvestorNotAllowlisted,
             );
         }
 
         // Sanctions screening: check investor against configured sanctions provider
-        Self::check_sanctions(&env, &investor);
+        Self::check_sanctions(env, &investor);
 
         // KYC gating: reject funding from unverified investors when a KYC registry is configured.
-        Self::check_kyc(&env, &investor);
+        Self::check_kyc(env, &investor);
 
-        let prev: i128 = Self::get_persistent_investor_contribution(&env, investor.clone());
+        let prev: i128 = Self::get_persistent_investor_contribution(env, investor.clone());
         let new_contribution: i128 = prev
             .checked_add(amount)
-            .unwrap_or_else(|| fail(&env, EscrowError::InvestorContributionOverflow));
+            .unwrap_or_else(|| fail(env, EscrowError::InvestorContributionOverflow));
 
         if let Some(cap) = env
             .storage()
@@ -5500,13 +5518,13 @@ impl LiquifactEscrow {
             .get::<DataKey, i128>(&DataKey::MaxPerInvestorCap)
         {
             ensure(
-                &env,
+                env,
                 new_contribution <= cap,
                 EscrowError::InvestorContributionExceedsCap,
             );
         }
 
-        Self::check_and_increment_funder_count(&env, prev);
+        Self::check_and_increment_funder_count(env, prev);
 
         // Capture the effective yield and tier lock threshold in locals so event fields can
         // be populated without post-write storage reads.
@@ -5519,42 +5537,42 @@ impl LiquifactEscrow {
             if prev == 0 {
                 investor_effective_yield_bps = escrow.yield_bps;
                 Self::set_persistent_investor_effective_yield(
-                    &env,
+                    env,
                     investor.clone(),
                     escrow.yield_bps,
                 );
-                Self::set_persistent_investor_claim_not_before(&env, investor.clone(), 0u64);
+                Self::set_persistent_investor_claim_not_before(env, investor.clone(), 0u64);
             } else {
                 // Returning investor: yield was set on first deposit; read it for the event.
                 investor_effective_yield_bps =
-                    Self::get_persistent_investor_effective_yield(&env, investor.clone())
+                    Self::get_persistent_investor_effective_yield(env, investor.clone())
                         .unwrap_or(escrow.yield_bps);
             }
             // If prev > 0, preserve existing effective yield and claim lock
         } else {
-            ensure(&env, prev == 0, EscrowError::TieredSecondDeposit);
+            ensure(env, prev == 0, EscrowError::TieredSecondDeposit);
             let (eff, lock) =
-                Self::effective_yield_for_commitment(&env, escrow.yield_bps, committed_lock_secs);
+                Self::effective_yield_for_commitment(env, escrow.yield_bps, committed_lock_secs);
             investor_effective_yield_bps = eff;
             tier_lock_secs = lock;
-            Self::set_persistent_investor_effective_yield(&env, investor.clone(), eff);
+            Self::set_persistent_investor_effective_yield(env, investor.clone(), eff);
             let now = env.ledger().timestamp();
             let claim_nb = if committed_lock_secs == 0 {
                 0u64
             } else {
                 now.checked_add(committed_lock_secs)
-                    .unwrap_or_else(|| fail(&env, EscrowError::InvestorClaimTimeOverflow))
+                    .unwrap_or_else(|| fail(env, EscrowError::InvestorClaimTimeOverflow))
             };
             // Bound: reject if the claim lock would expire after the escrow maturity.
             // Only constrained when both committed_lock_secs > 0 and maturity > 0.
             if claim_nb > 0 && escrow.maturity > 0 {
                 ensure(
-                    &env,
+                    env,
                     claim_nb <= escrow.maturity,
                     EscrowError::CommitmentLockExceedsMaturity,
                 );
             }
-            Self::set_persistent_investor_claim_not_before(&env, investor.clone(), claim_nb);
+            Self::set_persistent_investor_claim_not_before(env, investor.clone(), claim_nb);
 
             // Set investor lock-in period (separate from tier commitment lock)
             let lock_in_secs: u64 = env
@@ -5565,15 +5583,15 @@ impl LiquifactEscrow {
             if lock_in_secs > 0 {
                 let lock_until = now
                     .checked_add(lock_in_secs)
-                    .unwrap_or_else(|| fail(&env, EscrowError::InvestorClaimTimeOverflow));
-                Self::set_persistent_investor_lock_in_until(&env, investor.clone(), lock_until);
+                    .unwrap_or_else(|| fail(env, EscrowError::InvestorClaimTimeOverflow));
+                Self::set_persistent_investor_lock_in_until(env, investor.clone(), lock_until);
             }
         }
 
         let new_funded = escrow
             .funded_amount
             .checked_add(amount)
-            .unwrap_or_else(|| fail(&env, EscrowError::FundedAmountOverflow));
+            .unwrap_or_else(|| fail(env, EscrowError::FundedAmountOverflow));
 
         ensure!(
             new_funded <= escrow.funding_target,
@@ -5596,7 +5614,7 @@ impl LiquifactEscrow {
                     .unwrap_or(0);
                 if concentration_pct > concentration_cap as i128 {
                     let diagnostic = ErrorDiagnostic::with_context(
-                        &env,
+                        env,
                         EscrowError::ConcentrationLimitExceeded as u32,
                         "Investor concentration exceeds configured cap",
                         "Reduce funding amount or wait for other investors to fund",
@@ -5605,8 +5623,8 @@ impl LiquifactEscrow {
                             concentration_pct, concentration_cap
                         ),
                     );
-                    Self::emit_error_diagnostic(&env, diagnostic);
-                    fail(&env, EscrowError::ConcentrationLimitExceeded);
+                    Self::emit_error_diagnostic(env, diagnostic);
+                    fail(env, EscrowError::ConcentrationLimitExceeded);
                 }
             }
         }
@@ -5664,13 +5682,13 @@ impl LiquifactEscrow {
                         time_to_maturity_secs,
                         recorded_at_ledger_timestamp: snap.closed_at_ledger_timestamp,
                     }
-                    .publish(&env);
+                    .publish(env);
                 }
 
                 // Compute and store Merkle root for proof-based claim verification.
                 // The root is a Keccak-256 hash of the empty set when there are no
                 // investor entries to include (unlikely at funded status, but safe).
-                let merkle_root = Self::compute_empty_merkle_root(&env);
+                let merkle_root = Self::compute_empty_merkle_root(env);
                 env.storage()
                     .instance()
                     .set(&DataKey::FundingCloseMerkleRoot, &merkle_root);
@@ -5680,11 +5698,11 @@ impl LiquifactEscrow {
                     invoice_id: escrow.invoice_id.clone(),
                     merkle_root: merkle_root.clone(),
                 }
-                .publish(&env);
+                .publish(env);
             }
         }
 
-        Self::set_persistent_investor_contribution(&env, investor.clone(), new_contribution);
+        Self::set_persistent_investor_contribution(env, investor.clone(), new_contribution);
 
         // Record a funding-history checkpoint for this deposit (see #148). `escrow.status`
         // already reflects the funded-status transition (if any) computed above.
@@ -5694,7 +5712,7 @@ impl LiquifactEscrow {
             symbol_short!("deposit")
         };
         Self::append_investor_history_record(
-            &env,
+            env,
             investor.clone(),
             history_checkpoint,
             amount,
@@ -5703,7 +5721,7 @@ impl LiquifactEscrow {
 
         // Update the bucketed aggregate for dashboard O(1) reads.
         {
-            let bucket = Self::investor_bucket_index(&env, &investor);
+            let bucket = Self::investor_bucket_index(env, &investor);
             let prev_bucket: i128 = env
                 .storage()
                 .instance()
@@ -5732,7 +5750,8 @@ impl LiquifactEscrow {
                 .set(&DataKey::InvestorCount, &(investor_count + 1));
         }
 
-        env.storage().instance().set(&DataKey::Escrow, &escrow);
+        // NOTE: `DataKey::Escrow` is intentionally NOT written here. The caller
+        // (single-fund or batch path) persists the in-memory escrow exactly once.
 
         // Record the timestamp of this successful fund operation for stall detection.
         env.storage()
@@ -5750,7 +5769,7 @@ impl LiquifactEscrow {
             investor_effective_yield_bps,
             tier_lock_secs,
         }
-        .publish(&env);
+        .publish(env);
 
         // Also emit the versioned FundReceived with timestamp + actor.
         FundReceived {
@@ -5764,9 +5783,7 @@ impl LiquifactEscrow {
             investor_effective_yield_bps,
             tier_lock_secs,
         }
-        .publish(&env);
-
-        escrow
+        .publish(env);
     }
 
     /// Closes funding early for an under-funded invoice, transitioning the escrow to a settleable state.

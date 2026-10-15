@@ -227,3 +227,30 @@ jobs:
             --fail-under-lines 95 \
             --summary-only \
             -p karis_ky_escrow
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [sdk-ts, sdk, docs]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies (${{ matrix.package }})
+        working-directory: ${{ matrix.package }}
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Run npm audit (${{ matrix.package }})
+        working-directory: ${{ matrix.package }}
+        run: npm audit --audit-level=high

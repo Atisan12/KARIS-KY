@@ -215,6 +215,55 @@ Emitted after a successful `bind_primary_attestation_hash`. The legacy
 - `hash` (`BytesN<32>`) — the bound SHA-256 digest; represent as 64 hexadecimal characters off-chain
 - `ledger_timestamp` (`u64`) — ledger timestamp at binding, represented as a decimal string in JSON
 
+### `UpgradeProposedEvt`
+Emitted when an admin calls `propose_upgrade(new_wasm_hash)`. The proposal does not
+take effect immediately; it can only be applied by `execute_upgrade` once the
+minimum delay has elapsed. Indexers should use this event to surface pending
+upgrades and their earliest executable time.
+
+**Topics:**
+1. `upg_prop` (Symbol)
+
+**Data Payload:**
+- `new_wasm_hash` (`BytesN<32>`) — the proposed WASM hash; represent as 64 hexadecimal characters off-chain
+- `proposed_at` (`u64`) — ledger timestamp when the proposal was recorded
+- `executable_at` (`u64`) — ledger timestamp at which `execute_upgrade` becomes callable (`proposed_at + delay`)
+
+**Example (JSON Decoded):**
+```json
+{
+  "topics": ["upg_prop"],
+  "data": {
+    "new_wasm_hash": "ab12...ef34",
+    "proposed_at": 1714184400,
+    "executable_at": 1714188000
+  }
+}
+```
+
+### `UpgradeExecutedEvt`
+Emitted when an admin calls `execute_upgrade` and the pending WASM hash is applied.
+A proposal is cleared once executed, so a subsequent `execute_upgrade` requires a
+new `propose_upgrade`.
+
+**Topics:**
+1. `upg_exec` (Symbol)
+
+**Data Payload:**
+- `new_wasm_hash` (`BytesN<32>`) — the applied WASM hash; represent as 64 hexadecimal characters off-chain
+- `executed_at` (`u64`) — ledger timestamp when the upgrade was applied
+
+**Example (JSON Decoded):**
+```json
+{
+  "topics": ["upg_exec"],
+  "data": {
+    "new_wasm_hash": "ab12...ef34",
+    "executed_at": 1714188000
+  }
+}
+```
+
 ---
 
 ## 🛠️ Indexing Recommendations
