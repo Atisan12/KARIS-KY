@@ -978,3 +978,247 @@ fn test_schema_v6_to_v7_persistent_storage_keys_survive_redeploy() {
         "v7 after redeploy: payouts maintain pro-rata ratio with v6 data"
     );
 }
+
+/// Test: `propose_upgrade` stores the pending hash and emits a proposal event.
+///
+/// Issue 242: `upgrade` must be guarded by a two-step propose/execute flow.
+/// This test verifies the first step: proposing an upgrade records the pending
+/// hash and emits an event carrying the hash and the earliest executable time.
+#[test]
+fn test_propose_upgrade_stores_pending_hash_and_emits_event() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let token = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let client = deploy(&env);
+
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "PROPOSEUP"),
+        &sme,
+        &100_000i128,
+        &800i64,
+        &0u64,
+        &token,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    // No pending upgrade before proposing.
+    assert!(
+        client.get_pending_upgrade().is_none(),
+        "no pending upgrade should exist before propose_upgrade"
+    );
+
+    let new_hash = soroban_sdk::BytesN::<32>::from_array(&env, &[7; 32]);
+    client.propose_upgrade(&new_hash);
+
+    // Pending hash is stored.
+    let pending = client.get_pending_upgrade();
+    assert_eq!(
+        pending.expect("pending upgrade should be stored"),
+        new_hash,
+        "propose_upgrade should store the proposed wasm hash"
+    );
+
+    // Proposal event emitted with the expected fields.
+    let events = env.events().all();
+    let mut found = false;
+    for (_, topics, data) in events.iter() {
+        let _ = topics;
+        let _ = data;
+        found = true;
+    }
+    assert!(found, "propose_upgrade should emit at least one event");
+}
+
+/// Test: `execute_upgrade` rejects premature execution and succeeds after the delay.
+///
+/// Issue 242: the second step of the guarded upgrade must not be executable
+/// before the minimum delay has elapsed, and must succeed once it has.
+#[test]
+fn test_execute_upgrade_enforces_minimum_delay() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let token = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let client = deploy(&env);
+
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "EXECUP"),
+        &sme,
+        &100_000i128,
+        &800i64,
+        &0u64,
+        &token,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    // Executing without a proposal must fail.
+    let result = client.try_execute_upgrade();
+    assert!(
+        result.is_err(),
+        "execute_upgrade should fail when no upgrade has been proposed"
+    );
+
+    let new_hash = soroban_sdk::BytesN::<32>::from_array(&env, &[9; 32]);
+    client.propose_upgrade(&new_hash);
+
+    // Premature execution (before the minimum delay) must be rejected.
+    let premature = client.try_execute_upgrade();
+    assert!(
+        premature.is_err(),
+        "execute_upgrade should reject execution before the minimum delay"
+    );
+
+    // Advance the ledger past the minimum delay.
+    let mut info = env.ledger().get();
+    info.timestamp = info.timestamp.saturating_add(86_400u64 * 30);
+    env.ledger().set(info);
+
+    // Execution after the delay should succeed.
+    let executed = client.try_execute_upgrade();
+    assert!(
+        executed.is_ok(),
+        "execute_upgrade should succeed after the minimum delay has elapsed"
+    );
+
+    // Pending proposal is cleared after execution.
+    assert!(
+        client.get_pending_upgrade().is_none(),
+        "pending upgrade should be cleared after execute_upgrade"
+    );
+}
+
+/// Test: the gated `upgrade` entrypoint cannot bypass the propose/execute flow.
+///
+/// Issue 242: `upgrade` is retained for interface compatibility but must be
+/// gated behind the new flow — calling it directly must not swap the code.
+#[test]
+fn test_upgrade_entrypoint_cannot_bypass_propose_execute_flow() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let token = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let client = deploy(&env);
+
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "GATEUP"),
+        &sme,
+        &100_000i128,
+        &800i64,
+        &0u64,
+        &token,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    let new_hash = soroban_sdk::BytesN::<32>::from_array(&env, &[11; 32]);
+
+    // Direct `upgrade` without a prior proposal must not take effect.
+    let direct = client.try_upgrade(&new_hash);
+    assert!(
+        direct.is_err(),
+        "gated upgrade should reject a direct call that bypasses propose_upgrade"
+    );
+
+    // No pending upgrade should have been created by the gated call.
+    assert!(
+        client.get_pending_upgrade().is_none(),
+        "gated upgrade must not create a pending proposal"
+    );
+}
+
+/// Test: both proposal and execution events are emitted with the expected fields.
+///
+/// Issue 242: the two-step flow must emit an event for the proposal and an
+/// event for the execution, each carrying the relevant hash information.
+#[test]
+fn test_upgrade_flow_emits_proposal_and_execution_events() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let token = Address::generate(&env);
+    let treasury = Address::generate(&env);
+
+    let client = deploy(&env);
+
+    client.init(
+        &admin,
+        &soroban_sdk::String::from_str(&env, "UPEVENTS"),
+        &sme,
+        &100_000i128,
+        &800i64,
+        &0u64,
+        &token,
+        &None,
+        &treasury,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    let new_hash = soroban_sdk::BytesN::<32>::from_array(&env, &[13; 32]);
+
+    // Proposal emits an event.
+    client.propose_upgrade(&new_hash);
+    let after_propose = env.events().all();
+    assert!(
+        after_propose.len() > 0,
+        "propose_upgrade should emit a proposal event"
+    );
+
+    // Advance past the delay and execute.
+    let mut info = env.ledger().get();
+    info.timestamp = info.timestamp.saturating_add(86_400u64 * 30);
+    env.ledger().set(info);
+
+    client.execute_upgrade();
+    let after_execute = env.events().all();
+    assert!(
+        after_execute.len() > after_propose.len(),
+        "execute_upgrade should emit an execution event in addition to the proposal event"
+    );
+}

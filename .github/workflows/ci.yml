@@ -7,6 +7,19 @@ on:
     branches: [main]
 
 jobs:
+  secret-scan:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Run gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   fmt-build-test:
     runs-on: ubuntu-latest
     steps:
@@ -34,6 +47,12 @@ jobs:
 
       - name: Run cargo-audit (dependency vulnerability scan)
         run: cargo audit --deny warnings
+
+      - name: Install cargo-deny
+        uses: taiki-e/install-action@cargo-deny
+
+      - name: Run cargo-deny (licenses, bans, advisories)
+        run: cargo deny check
 
       - name: Run tests
         run: cargo test
@@ -221,3 +240,30 @@ jobs:
             --fail-under-lines 95 \
             --summary-only \
             -p karis_ky_escrow
+
+  npm-audit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        package: [sdk-ts, sdk, docs]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies (${{ matrix.package }})
+        working-directory: ${{ matrix.package }}
+        run: |
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+
+      - name: Run npm audit (${{ matrix.package }})
+        working-directory: ${{ matrix.package }}
+        run: npm audit --audit-level=high

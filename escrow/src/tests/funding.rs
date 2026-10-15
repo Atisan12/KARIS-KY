@@ -4374,3 +4374,226 @@ fn test_min_floor_exactly_at_floor_accepted() {
     let escrow = client.get_escrow();
     assert_eq!(escrow.funded_amount, floor);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// get_investor_position aggregation tests
+// ─────────────────────────────────────────────────────────────────────────────
+
+/// Helper: assert that `get_investor_position` aggregates exactly the values
+/// returned by the individual getters for the given investor.
+fn assert_position_matches_getters(
+    client: &LiquifactEscrowClient<'_>,
+    investor: &Address,
+) {
+    let position = client.get_investor_position(investor);
+    assert_eq!(
+        position.contribution,
+        client.get_contribution(investor),
+        "position.contribution must equal get_contribution"
+    );
+    assert_eq!(
+        position.yield_bps,
+        client.get_investor_yield_bps(investor),
+        "position.yield_bps must equal get_investor_yield_bps"
+    );
+    assert_eq!(
+        position.claim_not_before,
+        client.get_investor_claim_not_before(investor),
+        "position.claim_not_before must equal get_investor_claim_not_before"
+    );
+    assert_eq!(
+        position.refunded,
+        client.is_investor_refunded(investor),
+        "position.refunded must equal is_investor_refunded"
+    );
+    assert_eq!(
+        position.yield_claim_delegate,
+        client.get_yield_claim_delegate(investor),
+        "position.yield_claim_delegate must equal get_yield_claim_delegate"
+    );
+}
+
+/// Unfunded investor: all aggregated fields must be at their defaults.
+#[test]
+fn test_get_investor_position_unfunded_defaults() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    default_init(&client, &env, &admin, &sme);
+
+    let stranger = Address::generate(&env);
+    let position = client.get_investor_position(&stranger);
+
+    assert_eq!(position.contribution, 0i128);
+    assert_eq!(position.yield_bps, 0u32);
+    assert_eq!(position.claim_not_before, 0u64);
+    assert!(!position.refunded);
+    assert_eq!(position.yield_claim_delegate, None);
+
+    assert_position_matches_getters(&client, &stranger);
+}
+
+/// Funded investor: contribution, yield_bps and claim_not_before must be aggregated.
+#[test]
+fn test_get_investor_position_funded() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let inv = Address::generate(&env);
+    let (tok, tre) = free_addresses(&env);
+
+    let mut tiers = SorobanVec::new(&env);
+    tiers.push_back(YieldTier {
+        min_lock_secs: 100,
+        yield_bps: 950,
+    });
+
+    client.init(
+        &admin,
+        &String::from_str(&env, "POS_FUNDED"),
+        &sme,
+        &10_000i128,
+        &800i64,
+        &0u64,
+        &tok,
+        &None,
+        &tre,
+        &Some(tiers),
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000_000u64);
+    client.fund_with_commitment(&inv, &3_000i128, &100u64);
+
+    let position = client.get_investor_position(&inv);
+    assert_eq!(position.contribution, 3_000i128);
+    assert_eq!(position.yield_bps, 950u32);
+    assert_eq!(position.claim_not_before, 1_000_100u64);
+    assert!(!position.refunded);
+    assert_eq!(position.yield_claim_delegate, None);
+
+    assert_position_matches_getters(&client, &inv);
+}
+
+/// Claimed investor: aggregation must still match the individual getters.
+#[test]
+fn test_get_investor_position_claimed() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let inv = Address::generate(&env);
+    let (tok, tre) = free_addresses(&env);
+
+    client.init(
+        &admin,
+        &String::from_str(&env, "POS_CLAIMED"),
+        &sme,
+        &10_000i128,
+        &800i64,
+        &0u64,
+        &tok,
+        &None,
+        &tre,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    client.fund(&inv, &10_000i128);
+    client.settle();
+    client.claim_investor_payout(&inv);
+
+    assert_position_matches_getters(&client, &inv);
+}
+
+/// Refunded investor: the refunded flag must be reflected in the aggregation.
+#[test]
+fn test_get_investor_position_refunded() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    let (token, _) = init_with_token(&env, &client, &admin, &sme);
+    let contract_id = client.address.clone();
+    token.stellar.mint(&contract_id, &(TARGET / 2));
+    client.fund(&investor, &(TARGET / 2));
+    client.cancel_funding();
+    client.refund(&investor);
+
+    let position = client.get_investor_position(&investor);
+    assert!(position.refunded);
+    assert_eq!(position.contribution, 0i128);
+
+    assert_position_matches_getters(&client, &investor);
+}
+
+/// Delegated investor: the yield_claim_delegate must be aggregated.
+#[test]
+fn test_get_investor_position_delegated() {
+    let env = Env::default();
+    let (client, admin, sme) = setup(&env);
+    let investor = Address::generate(&env);
+    let delegate = Address::generate(&env);
+    default_init(&client, &env, &admin, &sme);
+    client.fund(&investor, &(TARGET / 2));
+    client.set_yield_claim_delegate(&investor, &delegate);
+
+    let position = client.get_investor_position(&investor);
+    assert_eq!(position.yield_claim_delegate, Some(delegate.clone()));
+
+    assert_position_matches_getters(&client, &investor);
+}
+
+/// Lock-in active: claim_not_before in the future must be aggregated correctly.
+#[test]
+fn test_get_investor_position_lock_in_active() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let client = deploy(&env);
+    let admin = Address::generate(&env);
+    let sme = Address::generate(&env);
+    let inv = Address::generate(&env);
+    let (tok, tre) = free_addresses(&env);
+
+    client.init(
+        &admin,
+        &String::from_str(&env, "POS_LOCKIN"),
+        &sme,
+        &10_000i128,
+        &800i64,
+        &0u64,
+        &tok,
+        &None,
+        &tre,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+        &None,
+    );
+
+    env.ledger().with_mut(|l| l.timestamp = 5_000u64);
+    client.fund_with_commitment(&inv, &4_000i128, &1_000u64);
+
+    let position = client.get_investor_position(&inv);
+    assert_eq!(position.claim_not_before, 6_000u64);
+    assert!(position.claim_not_before > env.ledger().timestamp());
+
+    assert_position_matches_getters(&client, &inv);
+}

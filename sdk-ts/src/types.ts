@@ -95,6 +95,9 @@ export interface EscrowSummary {
   funding_close_snapshot: FundingCloseSnapshot | null;
   unique_funder_count: number;
   is_allowlist_active: boolean;
+  allowlist_active: boolean;
+  dispute_pause_active: boolean;
+  dispute_pause_expiry: string | null;
   schema_version: number;
   sme_collateral_commitment: SmeCollateralCommitment | null;
   has_primary_attestation: boolean;
@@ -129,6 +132,17 @@ export interface InvestorCapStatus {
   remaining: number;
   /** Whether the investor cap is at maximum. */
   is_full: boolean;
+}
+
+/** Per-investor position snapshot returned by `get_investor_position`. */
+export interface InvestorPosition {
+  contribution: string;
+  yield_bps: string;
+  claim_not_before: string;
+  claimed: boolean;
+  refunded: boolean;
+  lock_in_until: string;
+  yield_claim_delegate: string | null;
 }
 
 /** Snapshot payload returned by `export_state` and accepted by `import_state`. */
