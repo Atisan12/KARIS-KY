@@ -18,6 +18,7 @@ import {
   type SmeCollateralCommitment,
   type EscrowSummary,
   type InvestorCapStatus,
+  type InvestorPosition,
   type EscrowSnapshot,
   type ErrorDiagnostic,
   type EscrowTemplate,
@@ -427,6 +428,10 @@ export class EscrowClient {
    */
   async getInvestorCapStatus(): Promise<InvestorCapStatus> {
     return this.simulate("get_investor_cap_status", []);
+  }
+
+  async getInvestorPosition(investor: string): Promise<InvestorPosition> {
+    return this.simulate("get_investor_position", [investor]);
   }
 
   // ---- State-mutating entrypoints ----

@@ -131,6 +131,17 @@ export interface InvestorCapStatus {
   is_full: boolean;
 }
 
+/** Per-investor position snapshot returned by `get_investor_position`. */
+export interface InvestorPosition {
+  contribution: string;
+  yield_bps: string;
+  claim_not_before: string;
+  claimed: boolean;
+  refunded: boolean;
+  lock_in_until: string;
+  yield_claim_delegate: string | null;
+}
+
 /** Snapshot payload returned by `export_state` and accepted by `import_state`. */
 export interface EscrowSnapshot {
   escrow: InvoiceEscrow;

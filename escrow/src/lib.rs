@@ -7884,6 +7884,41 @@ impl LiquifactEscrow {
         }
         None
     }
+
+    /// Read-only aggregate view of an investor's position in this escrow.
+    ///
+    /// Bundles the per-investor values that off-chain clients otherwise fetch with several
+    /// separate calls: contributed principal, effective yield (with base fallback), claim
+    /// lock, claimed/refunded markers, lock-in deadline, and any yield-claim delegate.
+    ///
+    /// # Authorization
+    /// None — pure read; no auth required.
+    pub fn get_investor_position(env: Env, investor: Address) -> InvestorPosition {
+        let contribution = Self::get_persistent_investor_contribution(&env, investor.clone());
+        let effective_yield_bps = Self::get_investor_yield_bps(env.clone(), investor.clone());
+        let claim_not_before =
+            Self::get_persistent_investor_claim_not_before(&env, investor.clone());
+        let claimed = Self::get_persistent_investor_claimed(&env, investor.clone());
+        let refunded: bool = env
+            .storage()
+            .instance()
+            .get(&DataKey::InvestorRefunded(investor.clone()))
+            .unwrap_or(false);
+        let lock_in_until = Self::get_persistent_investor_lock_in_until(&env, investor.clone());
+        let yield_claim_delegate =
+            Self::get_persistent_yield_claim_delegate(&env, investor.clone());
+
+        InvestorPosition {
+            investor,
+            contribution,
+            effective_yield_bps,
+            claim_not_before,
+            claimed,
+            refunded,
+            lock_in_until,
+            yield_claim_delegate,
+        }
+    }
 }
 
 #[cfg(test)]
