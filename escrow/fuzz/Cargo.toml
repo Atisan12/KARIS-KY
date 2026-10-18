@@ -32,14 +32,8 @@ test = false
 doc = false
 
 [[bin]]
-name = "escrow_init_validation"
-path = "fuzz_targets/escrow_init_validation.rs"
-test = false
-doc = false
-
-[[bin]]
-name = "escrow_holds"
-path = "fuzz_targets/escrow_holds.rs"
+name = "escrow_attestations"
+path = "fuzz_targets/escrow_attestations.rs"
 test = false
 doc = false
 
