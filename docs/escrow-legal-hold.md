@@ -1,34 +1,46 @@
 # Escrow Legal Hold — Security Reference
 
 `DataKey::LegalHold` is a boolean compliance gate stored in contract instance
-storage. When `true` it blocks every risk-bearing state transition. This
-document describes the gated operations, the enforcement model, governance
-expectations, and explicit out-of-scope items.
+storage. When `true` it blocks every state-mutating entrypoint except the
+explicit recovery and maintenance whitelist below. This document describes the
+enforcement model, governance expectations, and explicit out-of-scope items.
 
 ---
 
 ## Gated operations
 
-| Function | Panic message when hold is active |
+Risk-bearing operations retain their specific errors:
+
+| Function | Error when hold is active |
 |---|---|
-| `fund` | `Legal hold blocks new funding while active` |
-| `fund_with_commitment` | `Legal hold blocks new funding while active` |
-| `settle` | `Legal hold blocks settlement finalization` |
-| `withdraw` | `Legal hold blocks SME withdrawal` |
-| `claim_investor_payout` | `Legal hold blocks investor claims` |
-| `sweep_terminal_dust` | `Legal hold blocks treasury dust sweep` |
+| `fund`, `fund_with_commitment`, batch funding | `LegalHoldBlocksFunding` |
+| `settle`, `partial_settle` | `LegalHoldBlocksSettlement` or `LegalHoldBlocksMutation` |
+| `withdraw` | `LegalHoldBlocksWithdrawal` |
+| investor payout claims | `LegalHoldBlocksInvestorClaims` |
+| `cancel_funding` | `LegalHoldBlocksCancelFunding` |
+| `sweep_terminal_dust` | `LegalHoldBlocksTreasuryDustSweep` |
+| Other state-mutating entrypoints | `LegalHoldBlocksMutation` (217) |
 
-All six checks call the private `legal_hold_active(&env)` helper, which reads
-`DataKey::LegalHold` from instance storage and defaults to `false` when the key
-is absent. The check is the **first** assertion in each function body, so no
-partial state mutation can occur before the gate fires.
+Shared admin/SME authorization loaders enforce the generic error, and direct
+investor or cross-contract mutation paths check the hold explicitly. Checks
+precede storage writes and external transfers. The flag defaults to `false`
+when its storage key is absent.
 
-Operations that are **not** gated (read-only or metadata-only):
+## Explicit whitelist
 
-- `get_*` accessors
-- `record_sme_collateral_commitment` (metadata record, no token movement)
-- `bind_primary_attestation_hash` / `append_attestation_digest`
-- `update_maturity`, `update_funding_target`, `propose_admin`, `accept_admin`, `migrate`
+Only these entrypoints remain callable while a hold is active:
+
+- `set_legal_hold`, `clear_legal_hold`, `request_clear_legal_hold`,
+  `propose_legal_hold`, and `confirm_legal_hold` to manage the hold.
+- `propose_admin`, `accept_admin`, and the deprecated `transfer_admin` shim
+  to recover admin authority.
+- `bump_ttl`, which only extends storage lifetime and cannot change escrow
+  balances, status, or configuration.
+- Initialization, which is only available before an escrow and hold exist.
+
+All read-only entrypoints remain available. Attestation updates, collateral
+metadata, investor delegation, refunds, notifications, and configuration changes
+are mutations and are blocked like other non-whitelisted operations.
 
 ---
 
@@ -221,10 +233,10 @@ lost or destroyed:
 
 **On-chain recovery (only path):**
 
-1. Governance executes [`propose_admin`](../../escrow/src/lib.rs) using a
+1. Governance executes [`propose_admin`](../escrow/src/lib.rs) using a
    **still-available** current-admin authorization (e.g. remaining multisig
    signers or DAO vote output). This entrypoint is **not** blocked by the hold.
-2. The proposed successor executes [`accept_admin`](../../escrow/src/lib.rs)
+2. The proposed successor executes [`accept_admin`](../escrow/src/lib.rs)
    with its own authorization. This promotes the successor into
    `InvoiceEscrow::admin` and clears `DataKey::PendingAdmin`.
 3. The **new** admin calls `clear_legal_hold` (or `set_legal_hold(false)`).
